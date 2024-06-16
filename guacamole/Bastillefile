@@ -1,0 +1,52 @@
+ARG JAIL_NAME="guacamole"
+ARG DATABASE="mariadb"
+ARG DB_USER="guacamole"
+ARG DB_NAME="guacamole"
+ARG DB_PASSWORD="$(openssl rand -base64 15)"
+ARG DB_ROOT_PASSWORD="$(openssl rand -base64 15)"
+ARG DB_PATH=""
+
+CMD echo "${DB_ROOT_PASSWORD}" > /root/${JAIL_NAME}_db_root_password.txt
+CMD echo "${DB_PASSWORD}" > /root/${JAIL_NAME}_db_password.txt
+CMD echo "${DATABASE} root user is root and password is $(cat /root/${JAIL_NAME}_db_root_password.txt)" > /root/${JAIL_NAME}_info.txt
+CMD echo "Guacamole database user is ${DB_USER} and password is $(cat /root/${JAIL_NAME}_db_password.txt)" >> /root/${JAIL_NAME}_info.txt
+CMD echo "Guacamole default username and password are both guacadmin." >> /root/${JAIL_NAME}_info.txt
+
+CMD mkdir /var/db/mysql
+MOUNT "${DB_PATH}" /var/db/mysql rw 0 0
+
+PKG guacamole-server guacamole-client mariadb106-server mariadb106-client mysql-connector-j
+
+SYSRC guacd_enable=YES
+SYSRC tomcat9_enable=YES
+SYSRC mysql_enable=YES
+
+CMD mkdir /usr/local/etc/guacamole-client/lib
+CMD mkdir /usr/local/etc/guacamole-client/extensions
+CMD cp /usr/local/share/java/classes/mysql-connector-j.jar /usr/local/etc/guacamole-client/lib
+CMD tar xvfz /usr/local/share/guacamole-client/guacamole-auth-jdbc.tar.gz -C /tmp/
+CMD cp /tmp/guacamole-auth-jdbc-*/mysql/*.jar /usr/local/etc/guacamole-client/extensions
+CMD cp /usr/local/etc/guacamole-server/guacd.conf.sample /usr/local/etc/guacamole-server/guacd.conf
+CMD cp /usr/local/etc/guacamole-client/logback.xml.sample /usr/local/etc/guacamole-client/logback.xml
+CMD cp /usr/local/etc/guacamole-client/guacamole.properties.sample /usr/local/etc/guacamole-client/guacamole.properties
+CMD echo "mysql-hostname: localhost" >> /usr/local/etc/guacamole-client/guacamole.properties
+CMD echo "mysql-port:     3306" >> /usr/local/etc/guacamole-client/guacamole.properties
+CMD echo "mysql-database: ${DB_NAME}" >> /usr/local/etc/guacamole-client/guacamole.properties
+CMD echo "mysql-username: ${DB_USER}" >> /usr/local/etc/guacamole-client/guacamole.properties
+CMD echo "mysql-password: $(cat /root/${JAIL_NAME}_db_password.txt)" >> /usr/local/etc/guacamole-client/guacamole.properties
+
+SERVICE mysql-server start
+
+CMD mysql -u root -e "CREATE DATABASE ${DB_NAME};"
+CMD mysql -u root -e "GRANT ALL ON ${DB_NAME}.* TO '${DB_NAME}'@localhost IDENTIFIED BY '$(cat /root/${JAIL_NAME}_db_password.txt)';"
+CMD mysql -u root -e "DELETE FROM mysql.user WHERE User='';"
+CMD mysql -u root -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');"
+CMD mysql -u root -e "DROP DATABASE IF EXISTS test;"
+CMD mysql -u root -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';"
+CMD mysql -u root -e "FLUSH PRIVILEGES;"
+CMD mysqladmin --user=root password $(cat /root/${JAIL_NAME}_db_root_password.txt) reload
+CMD cat /tmp/guacamole-auth-jdbc-*/mysql/schema/*.sql | mysql -u root -p$(cat /root/${JAIL_NAME}_db_root_password.txt) ${DB_NAME}
+
+SERVICE mysql-server restart
+SERVICE guacd restart
+SERVICE tomcat9 restart
